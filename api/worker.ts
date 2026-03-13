@@ -14,6 +14,7 @@ interface PaymentEvent {
     fee: number;
     type: string;
     timestamp: Date;
+    settlementAmount?: number;
 }
 
 async function processLedger() {
@@ -35,27 +36,46 @@ async function processLedger() {
             try {
                 await client.query('BEGIN');
 
-                // 1. Debit the Gateway (Negative - what we actually receive: amount - fee)
-                const fee = event.fee || 0;
-                const currency = event.currency || 'USD';
-                await client.query(
-                    'INSERT INTO ledger_entries (transaction_id, account_type, amount, currency) VALUES ($1, $2, $3, $4)',
-                    [event.orderId, 'GATEWAY_RECEIVABLE', -(event.amount - fee), currency]
-                );
-
-                // 2. Debit the Gateway Fee (Negative)
-                if (fee > 0) {
+                if (event.type === 'PAYMENT_SUCCESS') {
+                    // 1. Debit the Gateway (Negative - what we actually receive: amount - fee)
+                    const fee = event.fee || 0;
+                    const currency = event.currency || 'USD';
                     await client.query(
                         'INSERT INTO ledger_entries (transaction_id, account_type, amount, currency) VALUES ($1, $2, $3, $4)',
-                        [event.orderId, 'GATEWAY_FEE', -fee, currency]
+                        [event.orderId, 'GATEWAY_RECEIVABLE', -(event.amount - fee), currency]
                     );
-                }
 
-                // 3. Credit Revenue (Positive)
-                await client.query(
-                    'INSERT INTO ledger_entries (transaction_id, account_type, amount, currency) VALUES ($1, $2, $3, $4)',
-                    [event.orderId, 'REVENUE', event.amount, currency]
-                );
+                    // 2. Debit the Gateway Fee (Negative)
+                    if (fee > 0) {
+                        await client.query(
+                            'INSERT INTO ledger_entries (transaction_id, account_type, amount, currency) VALUES ($1, $2, $3, $4)',
+                            [event.orderId, 'GATEWAY_FEE', -fee, currency]
+                        );
+                    }
+
+                    // 3. Credit Revenue (Positive)
+                    await client.query(
+                        'INSERT INTO ledger_entries (transaction_id, account_type, amount, currency) VALUES ($1, $2, $3, $4)',
+                        [event.orderId, 'REVENUE', event.amount, currency]
+                    );
+                } else if (event.type === 'SETTLEMENT_SUCCESS') {
+                    const currency = event.currency || 'USD';
+                    const amountToSettle = event.settlementAmount || 0;
+                    
+                    if (amountToSettle > 0) {
+                        // 1. Credit the Gateway Receivable (Positive) to reduce its negative balance
+                        await client.query(
+                            'INSERT INTO ledger_entries (transaction_id, account_type, amount, currency) VALUES ($1, $2, $3, $4)',
+                            [event.orderId, 'GATEWAY_RECEIVABLE', amountToSettle, currency]
+                        );
+
+                        // 2. Debit the Bank Account (Negative)
+                        await client.query(
+                            'INSERT INTO ledger_entries (transaction_id, account_type, amount, currency) VALUES ($1, $2, $3, $4)',
+                            [event.orderId, 'CHASE_BANK_ACCOUNT', -amountToSettle, currency]
+                        );
+                    }
+                }
 
                 await client.query('COMMIT');
                 
@@ -64,7 +84,7 @@ async function processLedger() {
                     'SELECT SUM(amount) as balance FROM ledger_entries WHERE transaction_id = $1',
                     [event.orderId]
                 );
-                console.log(`Ledger updated for order: ${event.orderId}. Integrity Check: Balance = ${check.rows[0].balance}`);
+                console.log(`Ledger updated for order: ${event.orderId} (${event.type}). Integrity Check: Balance = ${check.rows[0].balance}`);
             } catch (e) {
                 await client.query('ROLLBACK');
                 throw e;

@@ -209,17 +209,70 @@ app.get('/api/reconciliation', authenticateToken, async (req: Request, res: Resp
 
         // CONSULTANT POLISH: Inject a synthetic discrepancy if there are at least 2 transactions
         // This allows the reviewer to see the "Discrepancy" UI in action
-        if (mockGatewayReport.length >= 2) {
-            // Alter the amount of the first one
-            mockGatewayReport[0].amount += 10.00;
-            // Omit the second one entirely
-            mockGatewayReport.splice(1, 1);
-        }
+        // if (mockGatewayReport.length >= 2) {
+        //     // Alter the amount of the first one
+        //     mockGatewayReport[0].amount += 10.00;
+        //     // Omit the second one entirely
+        //     mockGatewayReport.splice(1, 1);
+        // }
 
         res.status(200).json({ statusCode: 200, message: 'Reconciliation report retrieved successfully', result: mockGatewayReport });
     } catch (err) {
         console.error('Error fetching reconciliation report:', err);
         res.status(500).json({ statusCode: 500, message: 'Internal Server Error', result: null });
+    }
+});
+
+// Simulate settlement (Payout from Gateway to Bank Account)
+app.post('/api/simulate-settlement', async (req: Request, res: Response) => {
+    const { transactionId } = req.body;
+
+    if (!transactionId) {
+        return res.status(400).json({ statusCode: 400, message: 'transactionId is required', result: null });
+    }
+
+    try {
+        // 1. Calculate how much the gateway owes us for this transaction
+        const result = await pool.query(
+            "SELECT SUM(amount) as balance, MAX(currency) as currency FROM ledger_entries WHERE transaction_id = $1 AND account_type = 'GATEWAY_RECEIVABLE'",
+            [transactionId]
+        );
+
+        const balance = parseFloat(result.rows[0].balance || '0');
+        const currency = result.rows[0].currency || 'USD';
+
+        // Remember, GATEWAY_RECEIVABLE is negative when they owe us.
+        // If balance is 0 or positive, there is nothing to settle.
+        if (balance >= 0) {
+            return res.status(400).json({ 
+                statusCode: 400, 
+                message: 'No pending settlement found for this transaction. It may have already been settled.', 
+                result: null 
+            });
+        }
+
+        const amountToSettle = Math.abs(balance);
+
+        // 2. Queue the settlement event
+        await redis.lpush('payment_events', JSON.stringify({
+            orderId: transactionId,
+            amount: 0, // Not used for settlement
+            fee: 0,
+            currency: currency,
+            type: 'SETTLEMENT_SUCCESS',
+            settlementAmount: amountToSettle,
+            timestamp: new Date()
+        }));
+
+        res.status(200).json({ 
+            statusCode: 200, 
+            message: `Successfully simulated settlement of ${amountToSettle} ${currency} to bank account.`, 
+            result: { transactionId, settledAmount: amountToSettle } 
+        });
+
+    } catch (err) {
+        console.error('Error simulating settlement:', err);
+        return res.status(500).json({ statusCode: 500, message: 'Internal Server Error', result: null });
     }
 });
 

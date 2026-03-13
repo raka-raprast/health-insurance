@@ -40,6 +40,47 @@ export default function App() {
   const [totalPages, setTotalPages] = useState(1);
   const [totalItems, setTotalItems] = useState(0);
 
+  const handleLogout = () => {
+    setToken(null);
+    localStorage.removeItem('adminToken');
+  };
+
+  const fetchTransactions = async (page = 1) => {
+    try {
+      const res = await fetch(`${import.meta.env.VITE_API_BASE_URL}/api/transactions?page=${page}&limit=10`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.status === 401 || res.status === 403) return handleLogout();
+      const data = await res.json();
+      if (data.statusCode === 200) {
+        setTransactions(data.result);
+        setCurrentPage(data.meta.page);
+        setTotalPages(data.meta.totalPages);
+        setTotalItems(data.meta.total);
+      }
+    } catch (err) {
+      console.error('Failed to fetch transactions', err);
+    }
+  };
+
+  const fetchGatewayReport = async () => {
+    setIsReconciling(true);
+    fetchTransactions(currentPage); // Refresh the transaction list as well
+    try {
+      const res = await fetch(`${import.meta.env.VITE_API_BASE_URL}/api/reconciliation`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.status === 401 || res.status === 403) return handleLogout();
+      const data = await res.json();
+      if (data.statusCode === 200) {
+        setGatewayReport(data.result);
+      }
+    } catch (err) {
+      console.error('Failed to fetch gateway report', err);
+    }
+    setTimeout(() => setIsReconciling(false), 1000);
+  };
+
   useEffect(() => {
     if (token) {
       fetchTransactions(currentPage);
@@ -65,29 +106,7 @@ export default function App() {
       }
     } catch (err) {
       setLoginError('Network error');
-    }
-  };
-
-  const handleLogout = () => {
-    setToken(null);
-    localStorage.removeItem('adminToken');
-  };
-
-  const fetchTransactions = async (page = 1) => {
-    try {
-      const res = await fetch(`${import.meta.env.VITE_API_BASE_URL}/api/transactions?page=${page}&limit=10`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      if (res.status === 401 || res.status === 403) return handleLogout();
-      const data = await res.json();
-      if (data.statusCode === 200) {
-        setTransactions(data.result);
-        setCurrentPage(data.meta.page);
-        setTotalPages(data.meta.totalPages);
-        setTotalItems(data.meta.total);
-      }
-    } catch (err) {
-      console.error('Failed to fetch transactions', err);
+      console.log(err);
     }
   };
 
@@ -108,22 +127,31 @@ export default function App() {
     }
   };
 
-  const fetchGatewayReport = async () => {
-    setIsReconciling(true);
-    fetchTransactions(currentPage); // Refresh the transaction list as well
+  const simulateSettlement = async (transactionId: string) => {
     try {
-      const res = await fetch(`${import.meta.env.VITE_API_BASE_URL}/api/reconciliation`, {
-        headers: { 'Authorization': `Bearer ${token}` }
+      const res = await fetch(`${import.meta.env.VITE_API_BASE_URL}/api/simulate-settlement`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ transactionId })
       });
-      if (res.status === 401 || res.status === 403) return handleLogout();
+      
       const data = await res.json();
-      if (data.statusCode === 200) {
-        setGatewayReport(data.result);
+      if (res.status === 200) {
+        alert(data.message);
+        // If audit modal is open, refresh it
+        if (isModalOpen && selectedTx === transactionId) {
+          openAuditView(transactionId);
+        }
+      } else {
+        alert(data.message || 'Failed to simulate settlement');
       }
     } catch (err) {
-      console.error('Failed to fetch gateway report', err);
+      console.error('Failed to simulate settlement', err);
+      alert('Network error while simulating settlement');
     }
-    setTimeout(() => setIsReconciling(false), 1000);
   };
 
   // CONSULTANT POLISH: Improved discrepancy detection logic
@@ -255,7 +283,16 @@ export default function App() {
                         {tx.status}
                       </span>
                     </td>
-                    <td className="py-4 px-6 text-right">
+                    <td className="py-4 px-6 text-right space-x-2">
+                      {tx.status === 'SUCCESS' && (
+                        <button 
+                          onClick={() => simulateSettlement(tx.wix_order_id)}
+                          className="text-gray-400 hover:text-green-600 font-medium text-sm transition-colors p-2"
+                          title="Simulate bank settlement"
+                        >
+                          Settle $
+                        </button>
+                      )}
                       <button 
                         onClick={() => openAuditView(tx.wix_order_id)}
                         className="text-gray-400 hover:text-blue-600 font-medium text-sm transition-colors p-2"
