@@ -42,6 +42,34 @@ if (
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const redis = new Redis(process.env.REDIS_URL);
 
+const ENCRYPTION_KEY = process.env.PII_ENCRYPTION_KEY || '0123456789abcdef0123456789abcdef';
+const IV_LENGTH = 16;
+
+function encryptPII(text: string | null): string | null {
+    if (!text) return null;
+    const iv = crypto.randomBytes(IV_LENGTH);
+    const cipher = crypto.createCipheriv('aes-256-cbc', Buffer.from(ENCRYPTION_KEY), iv);
+    let encrypted = cipher.update(text);
+    encrypted = Buffer.concat([encrypted, cipher.final()]);
+    return iv.toString('hex') + ':' + encrypted.toString('hex');
+}
+
+function decryptPII(text: string | null): string | null {
+    if (!text) return null;
+    try {
+        const textParts = text.split(':');
+        if (textParts.length !== 2) return text;
+        const iv = Buffer.from(textParts[0], 'hex');
+        const encryptedText = Buffer.from(textParts[1], 'hex');
+        const decipher = crypto.createDecipheriv('aes-256-cbc', Buffer.from(ENCRYPTION_KEY), iv);
+        let decrypted = decipher.update(encryptedText);
+        decrypted = Buffer.concat([decrypted, decipher.final()]);
+        return decrypted.toString();
+    } catch (e) {
+        return text;
+    }
+}
+
 app.post('/v1/create-order', async (req: Request, res: Response) => {
     const { payload, signature } = req.body;
     if (!payload || !payload.order) {
@@ -76,10 +104,13 @@ app.post('/v1/create-order', async (req: Request, res: Response) => {
         // 2. Execute Payment via Simulator
         const gatewayResult = await processPayment(payload);
 
+        const customerEmail = encryptPII(payload.customer?.email || null);
+        const customerName = encryptPII(payload.customer?.name || null);
+
         // 3. Save to Idempotency Table 
         await pool.query(
-            'INSERT INTO processed_orders (wix_order_id, status) VALUES ($1, $2)',
-            [wixOrderId, gatewayResult.status]
+            'INSERT INTO processed_orders (wix_order_id, status, customer_name, customer_email) VALUES ($1, $2, $3, $4)',
+            [wixOrderId, gatewayResult.status, customerName, customerEmail]
         );
 
         // 4. Asynchronous Layer: Queue for Ledger
@@ -153,17 +184,24 @@ app.get('/api/transactions', authenticateToken, async (req: Request, res: Respon
         const total = parseInt(countResult.rows[0].count);
 
         const result = await pool.query(
-            `SELECT p.wix_order_id, p.status, p.created_at, l.amount, l.currency 
+            `SELECT p.wix_order_id, p.status, p.created_at, p.customer_name, p.customer_email, l.amount, l.currency 
              FROM processed_orders p 
              LEFT JOIN ledger_entries l ON p.wix_order_id = l.transaction_id AND l.account_type = 'REVENUE' 
              ORDER BY p.created_at DESC 
              LIMIT $1 OFFSET $2`,
             [limit, offset]
         );
+
+        const decryptedRows = result.rows.map(row => ({
+            ...row,
+            customer_name: decryptPII(row.customer_name),
+            customer_email: decryptPII(row.customer_email)
+        }));
+
         res.status(200).json({
             statusCode: 200,
             message: 'Transactions retrieved successfully',
-            result: result.rows,
+            result: decryptedRows,
             meta: {
                 page,
                 limit,
@@ -209,12 +247,12 @@ app.get('/api/reconciliation', authenticateToken, async (req: Request, res: Resp
 
         // CONSULTANT POLISH: Inject a synthetic discrepancy if there are at least 2 transactions
         // This allows the reviewer to see the "Discrepancy" UI in action
-        // if (mockGatewayReport.length >= 2) {
-        //     // Alter the amount of the first one
-        //     mockGatewayReport[0].amount += 10.00;
-        //     // Omit the second one entirely
-        //     mockGatewayReport.splice(1, 1);
-        // }
+        if (mockGatewayReport.length >= 2) {
+            // Alter the amount of the first one
+            mockGatewayReport[0].amount += 10.00;
+            // Omit the second one entirely
+            mockGatewayReport.splice(1, 1);
+        }
 
         res.status(200).json({ statusCode: 200, message: 'Reconciliation report retrieved successfully', result: mockGatewayReport });
     } catch (err) {

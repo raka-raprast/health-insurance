@@ -86,6 +86,7 @@ export default function Storefront() {
         description: `${selectedPlan.name} Health Premium`,
       },
       customer: {
+        name: name,
         email: email,
       },
       simulationMode: simulationMode,
