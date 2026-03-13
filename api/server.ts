@@ -35,14 +35,15 @@ if (
     !process.env.WIX_SECRET ||
     !process.env.ADMIN_JWT_SECRET ||
     !process.env.ADMIN_USERNAME ||
-    !process.env.ADMIN_PASSWORD
+    !process.env.ADMIN_PASSWORD ||
+    !process.env.PII_ENCRYPTION_KEY
 ) {
-    throw new Error('Ensure DATABASE_URL, REDIS_URL, WIX_SECRET, ADMIN_JWT_SECRET, ADMIN_USERNAME, and ADMIN_PASSWORD environment variables are set');
+    throw new Error('Ensure DATABASE_URL, REDIS_URL, WIX_SECRET, ADMIN_JWT_SECRET, ADMIN_USERNAME, ADMIN_PASSWORD, and PII_ENCRYPTION_KEY environment variables are set');
 }
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const redis = new Redis(process.env.REDIS_URL);
 
-const ENCRYPTION_KEY = process.env.PII_ENCRYPTION_KEY || '0123456789abcdef0123456789abcdef';
+const ENCRYPTION_KEY = process.env.PII_ENCRYPTION_KEY as string;
 const IV_LENGTH = 16;
 
 function encryptPII(text: string | null): string | null {

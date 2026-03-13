@@ -5,6 +5,8 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE TABLE processed_orders (
     wix_order_id VARCHAR(255) PRIMARY KEY, -- Ensures we don't process same ID twice
     status VARCHAR(50) NOT NULL,
+    customer_name VARCHAR(255),
+    customer_email VARCHAR(255),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
