@@ -1,0 +1,138 @@
+openapi: 3.0.3
+info:
+  title: Health Insurance POS API
+  description: Middleware connecting a Wix Storefront to an Internal Financial Ledger.
+  version: 1.0.0
+servers:
+  - url: http://localhost:3000
+    description: Local development server
+
+paths:
+  /v1/create-order:
+    post:
+      summary: Create a new Wix order (Wix SPI Standard)
+      description: Validates HMAC signature, checks idempotency, and executes payment via the gateway simulator.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                payload:
+                  type: object
+                  required: [merchantId, order, customer]
+                  properties:
+                    merchantId:
+                      type: string
+                    order:
+                      type: object
+                      required: [id, amount, currency, description]
+                      properties:
+                        id:
+                          type: string
+                        amount:
+                          type: number
+                        currency:
+                          type: string
+                        description:
+                          type: string
+                    customer:
+                      type: object
+                      required: [email]
+                      properties:
+                        email:
+                          type: string
+                signature:
+                  type: string
+      responses:
+        '200':
+          description: Payment successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  orderId:
+                    type: string
+        '400':
+          description: Invalid request or Payment Declined
+        '401':
+          description: Invalid signature
+        '409':
+          description: Duplicate order ID (Idempotency violation)
+
+  /api/transactions:
+    get:
+      summary: List all processed orders
+      description: Returns a list of all transactions from the idempotency table.
+      responses:
+        '200':
+          description: A list of transactions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    wix_order_id:
+                      type: string
+                    status:
+                      type: string
+                    created_at:
+                      type: string
+                      format: date-time
+
+  /api/transactions/{id}/ledger:
+    get:
+      summary: Get ledger entries for a transaction
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Double-entry ledger records for the transaction
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                      format: uuid
+                    account_type:
+                      type: string
+                    amount:
+                      type: string
+                    created_at:
+                      type: string
+                      format: date-time
+
+  /api/reconciliation:
+    get:
+      summary: Fetch Mock Gateway Report
+      description: Returns a list of transactions from the "external gateway" for audit.
+      responses:
+        '200':
+          description: Mocked gateway report
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    transaction_id:
+                      type: string
+                    status:
+                      type: string
+                    amount:
+                      type: number

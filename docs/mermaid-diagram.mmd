@@ -1,0 +1,23 @@
+sequenceDiagram
+    participant UI as HealthSafe Storefront
+    participant API as POS API (Express)
+    participant GTW as Mock Gateway (Simulator)
+    participant Redis as Redis Queue
+    participant Worker as Background Worker
+    participant DB as Postgres Ledger
+
+    UI->>API: POST /v1/create-order (Signed Payload)
+    API->>API: Validate HMAC Signature
+    API->>DB: Check Idempotency (wix-order-id)
+    API->>GTW: processPayment(details)
+    GTW-->>API: Status: SUCCESS (2-5s delay)
+    API->>DB: Record order status in processed_orders
+    API->>Redis: LPUSH payment_event (order details)
+    API-->>UI: Response: 200 SUCCESS
+
+    Worker->>Redis: BRPOP payment_event
+    Worker->>DB: BEGIN TRANSACTION
+    Worker->>DB: INSERT INTO ledger_entries (Debit Gateway)
+    Worker->>DB: INSERT INTO ledger_entries (Credit Revenue)
+    Worker->>DB: COMMIT
+    Worker-->>Worker: Log success
